@@ -411,26 +411,18 @@ app.get('/api/getPublicDiaries', async (req, res) => {
       }
     }
     
-    const list = data.map(item => {
-      const user = userMap[item.open_id] || {}
-      return {
-        id: item.id,
-        title: item.title,
-        cover_url: item.cover_url,
-        video_url: item.video_url,
-        location: item.location,
-        weather: item.weather,
-        diary_date: item.diary_date,
-        like_count: item.like_count || 0,
-        comment_count: item.comment_count || 0,
-        created_at: item.created_at,
-        is_liked: likedMap[item.id] || false,
-        user: {
-          nickName: user.nick_name || '用户',
-          avatarUrl: user.avatar_url || ''
-        }
+    const comments = data.map(item => ({
+      id: item.id,
+      content: item.content,
+      like_count: item.like_count || 0,
+      created_at: item.created_at,
+      open_id: item.open_id,
+      isMine: item.open_id === currentOpenId,
+      user: {
+        nickName: userMap[item.open_id]?.nick_name || '用户',
+        avatarUrl: userMap[item.open_id]?.avatar_url || ''
       }
-    })
+    }))
     
     res.json({ success: true, list, total: count, page: parseInt(page), size: parseInt(size) })
   } catch (err) {
@@ -671,7 +663,8 @@ app.post('/api/addComment', async (req, res) => {
  * GET /api/getComments?diaryId=xxx&page=1&size=20
  */
 app.get('/api/getComments', async (req, res) => {
-  const { diaryId, page = 1, size = 20 } = req.query
+  const { diaryId, page = 1, size, pageSize } = req.query
+  const limit = parseInt(size || pageSize || 20)
   
   if (!diaryId) {
     return res.status(400).json({ success: false, error: '缺少日记ID' })
@@ -683,7 +676,7 @@ app.get('/api/getComments', async (req, res) => {
   try {
     const { data, error, count } = await supabase
       .from('comments')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('diary_id', diaryId)
       .order('created_at', { ascending: false })
       .range(from, to)
