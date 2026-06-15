@@ -39,9 +39,7 @@ app.get('/api/getDiaryList', async (req, res) => {
   res.json({ success: true, list: data })
 })
 
-app.listen(3000, () => {
-  console.log('后端运行在 http://localhost:3000')
-})
+
 
 // 保存日记
 app.post('/api/addDiary', async (req, res) => {
@@ -295,8 +293,8 @@ let tokenExpireTime = 0
 
 async function getBaiduAsrToken() {
   // 临时硬编码（直接写死）
-  const apiKey = 'tKgRTo21zEZSQDm3ZXgCaZQK'
-  const secretKey = 'Uv9ZMvYueYV7poicqSfWx5olOdGM1Tak'
+  const apiKey = process.env.BAIDU_ASR_API_KEY
+  const secretKey = process.env.BAIDU_ASR_SECRET_KEY
   
   // 如果 token 还有效（提前5分钟刷新）
   if (cachedToken && Date.now() < tokenExpireTime - 5 * 60 * 1000) {
@@ -359,3 +357,416 @@ app.post('/api/extractAudioAndASR', async (req, res) => {
   }
 })
 
+app.get('/api/getPublicDiaries', async (req, res) => {
+  const { page = 1, size = 10, sort = 'latest' } = req.query
+  const currentOpenId = req.headers['x-openid'] || null
+  
+  const from = (parseInt(page) - 1) * parseInt(size)
+  const to = from + parseInt(size) - 1
+  
+  try {
+    let query = supabase
+      .from('diaries')
+      .select(`
+        *,
+        users:open_id (nick_name, avatar_url)
+      `, { count: 'exact' })
+      .eq('is_public', true)
+      .range(from, to)
+    
+    if (sort === 'mostLiked') {
+      query = query.order('like_count', { ascending: false })
+    } else {
+      query = query.order('created_at', { ascending: false })
+    }
+    
+    const { data, error, count } = await query
+    
+    if (error) throw error
+    
+    let likedMap = {}
+    if (currentOpenId && data.length > 0) {
+      const diaryIds = data.map(d => d.id)
+      const { data: likes } = await supabase
+        .from('likes')
+        .select('diary_id')
+        .eq('open_id', currentOpenId)
+        .in('diary_id', diaryIds)
+      
+      likes.forEach(like => { likedMap[like.diary_id] = true })
+    }
+    
+    const list = data.map(item => ({
+      id: item.id,
+      title: item.title,
+      cover_url: item.cover_url,
+      video_url: item.video_url,
+      location: item.location,
+      weather: item.weather,
+      diary_date: item.diary_date,
+      like_count: item.like_count || 0,
+      comment_count: item.comment_count || 0,
+      created_at: item.created_at,
+      is_liked: likedMap[item.id] || false,
+      user: {
+        nickName: item.users?.nick_name || '匿名用户',
+        avatarUrl: item.users?.avatar_url || ''
+      }
+    }))
+    
+    res.json({ success: true, list, total: count, page: parseInt(page), size: parseInt(size) })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 2. 关注用户
+ * POST /api/followUser
+ */
+app.post('/api/followUser', async (req, res) => {
+  const currentOpenId = req.headers['x-openid']
+  const { targetOpenId } = req.body
+  
+  if (!currentOpenId) {
+    return res.status(401).json({ success: false, error: '未登录' })
+  }
+  if (!targetOpenId) {
+    return res.status(400).json({ success: false, error: '缺少目标用户ID' })
+  }
+  if (currentOpenId === targetOpenId) {
+    return res.status(400).json({ success: false, error: '不能关注自己' })
+  }
+  
+  try {
+    const { data: existing } = await supabase
+      .from('follows')
+      .select('id')
+      .eq('follower_open_id', currentOpenId)
+      .eq('following_open_id', targetOpenId)
+      .single()
+    
+    if (existing) {
+      return res.json({ success: false, error: '已经关注过了' })
+    }
+    
+    const { error } = await supabase
+      .from('follows')
+      .insert([{
+        follower_open_id: currentOpenId,
+        following_open_id: targetOpenId,
+        created_at: new Date()
+      }])
+    
+    if (error) throw error
+    
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 3. 取消关注
+ * POST /api/unfollowUser
+ */
+app.post('/api/unfollowUser', async (req, res) => {
+  const currentOpenId = req.headers['x-openid']
+  const { targetOpenId } = req.body
+  
+  if (!currentOpenId) {
+    return res.status(401).json({ success: false, error: '未登录' })
+  }
+  if (!targetOpenId) {
+    return res.status(400).json({ success: false, error: '缺少目标用户ID' })
+  }
+  
+  try {
+    const { error } = await supabase
+      .from('follows')
+      .delete()
+      .eq('follower_open_id', currentOpenId)
+      .eq('following_open_id', targetOpenId)
+    
+    if (error) throw error
+    
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 4. 获取关注/粉丝列表
+ * GET /api/getFollowList?targetOpenId=xxx&type=following&page=1&size=20
+ */
+app.get('/api/getFollowList', async (req, res) => {
+  const currentOpenId = req.headers['x-openid']
+  const { targetOpenId, type = 'following', page = 1, size = 20 } = req.query
+  
+  const userId = targetOpenId || currentOpenId
+  const from = (parseInt(page) - 1) * parseInt(size)
+  const to = from + parseInt(size) - 1
+  
+  try {
+    let query
+    if (type === 'following') {
+      query = supabase
+        .from('follows')
+        .select(`
+          following_open_id,
+          users:following_open_id (nick_name, avatar_url, bio)
+        `)
+        .eq('follower_open_id', userId)
+        .range(from, to)
+    } else {
+      query = supabase
+        .from('follows')
+        .select(`
+          follower_open_id,
+          users:follower_open_id (nick_name, avatar_url, bio)
+        `)
+        .eq('following_open_id', userId)
+        .range(from, to)
+    }
+    
+    const { data, error } = await query
+    
+    if (error) throw error
+    
+    const list = data.map(item => {
+      const userData = type === 'following' ? item.users : item.users
+      return {
+        openId: type === 'following' ? item.following_open_id : item.follower_open_id,
+        nickName: userData?.nick_name || '匿名用户',
+        avatarUrl: userData?.avatar_url || '',
+        bio: userData?.bio || ''
+      }
+    })
+    
+    res.json({ success: true, list, page: parseInt(page), size: parseInt(size) })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 5. 点赞/取消点赞
+ * POST /api/updateLike
+ */
+app.post('/api/updateLike', async (req, res) => {
+  const currentOpenId = req.headers['x-openid']
+  const { diaryId, action } = req.body
+  
+  if (!currentOpenId) {
+    return res.status(401).json({ success: false, error: '未登录' })
+  }
+  if (!diaryId) {
+    return res.status(400).json({ success: false, error: '缺少日记ID' })
+  }
+  
+  try {
+    if (action === 'like') {
+      const { data: existing } = await supabase
+        .from('likes')
+        .select('id')
+        .eq('open_id', currentOpenId)
+        .eq('diary_id', diaryId)
+        .single()
+      
+      if (!existing) {
+        await supabase
+          .from('likes')
+          .insert([{
+            open_id: currentOpenId,
+            diary_id: diaryId,
+            created_at: new Date()
+          }])
+        
+        await supabase.rpc('increment_like_count', { diary_id_param: diaryId })
+      }
+    } else {
+      await supabase
+        .from('likes')
+        .delete()
+        .eq('open_id', currentOpenId)
+        .eq('diary_id', diaryId)
+      
+      await supabase.rpc('decrement_like_count', { diary_id_param: diaryId })
+    }
+    
+    const { data: diary } = await supabase
+      .from('diaries')
+      .select('like_count')
+      .eq('id', diaryId)
+      .single()
+    
+    res.json({ success: true, likeCount: diary?.like_count || 0 })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 6. 发表评论
+ * POST /api/addComment
+ */
+app.post('/api/addComment', async (req, res) => {
+  const currentOpenId = req.headers['x-openid']
+  const { diaryId, content } = req.body
+  
+  if (!currentOpenId) {
+    return res.status(401).json({ success: false, error: '未登录' })
+  }
+  if (!diaryId || !content) {
+    return res.status(400).json({ success: false, error: '缺少必要参数' })
+  }
+  if (content.length > 500) {
+    return res.status(400).json({ success: false, error: '评论内容不能超过500字' })
+  }
+  
+  try {
+    const { data, error } = await supabase
+      .from('comments')
+      .insert([{
+        open_id: currentOpenId,
+        diary_id: diaryId,
+        content: content,
+        created_at: new Date()
+      }])
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    await supabase.rpc('increment_comment_count', { diary_id_param: diaryId })
+    
+    res.json({ success: true, commentId: data.id })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 7. 获取评论列表
+ * GET /api/getComments?diaryId=xxx&page=1&size=20
+ */
+app.get('/api/getComments', async (req, res) => {
+  const { diaryId, page = 1, size = 20 } = req.query
+  
+  if (!diaryId) {
+    return res.status(400).json({ success: false, error: '缺少日记ID' })
+  }
+  
+  const from = (parseInt(page) - 1) * parseInt(size)
+  const to = from + parseInt(size) - 1
+  
+  try {
+    const { data, error, count } = await supabase
+      .from('comments')
+      .select(`
+        *,
+        users:open_id (nick_name, avatar_url)
+      `, { count: 'exact' })
+      .eq('diary_id', diaryId)
+      .order('created_at', { ascending: false })
+      .range(from, to)
+    
+    if (error) throw error
+    
+    const comments = data.map(item => ({
+      id: item.id,
+      content: item.content,
+      like_count: item.like_count || 0,
+      created_at: item.created_at,
+      user: {
+        nickName: item.users?.nick_name || '匿名用户',
+        avatarUrl: item.users?.avatar_url || ''
+      }
+    }))
+    
+    res.json({ success: true, comments, total: count, page: parseInt(page), size: parseInt(size) })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 8. 删除评论
+ * DELETE /api/deleteComment
+ */
+app.delete('/api/deleteComment', async (req, res) => {
+  const currentOpenId = req.headers['x-openid']
+  const { commentId, diaryId } = req.body
+  
+  if (!currentOpenId) {
+    return res.status(401).json({ success: false, error: '未登录' })
+  }
+  if (!commentId || !diaryId) {
+    return res.status(400).json({ success: false, error: '缺少必要参数' })
+  }
+  
+  try {
+    const { data: comment, error: findError } = await supabase
+      .from('comments')
+      .select('open_id')
+      .eq('id', commentId)
+      .single()
+    
+    if (findError || !comment) {
+      return res.status(404).json({ success: false, error: '评论不存在' })
+    }
+    
+    if (comment.open_id !== currentOpenId) {
+      return res.status(403).json({ success: false, error: '只能删除自己的评论' })
+    }
+    
+    const { error } = await supabase
+      .from('comments')
+      .delete()
+      .eq('id', commentId)
+    
+    if (error) throw error
+    
+    await supabase.rpc('decrement_comment_count', { diary_id_param: diaryId })
+    
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+app.get('/api/getUserStats', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  
+  // 获取日记总数
+  const { count: diaryTotal } = await supabase
+    .from('diaries')
+    .select('*', { count: 'exact', head: true })
+    .eq('open_id', openId)
+  
+  // 获取关注数
+  const { count: followCount } = await supabase
+    .from('follows')
+    .select('*', { count: 'exact', head: true })
+    .eq('follower_open_id', openId)
+  
+  // 获取粉丝数
+  const { count: fanCount } = await supabase
+    .from('follows')
+    .select('*', { count: 'exact', head: true })
+    .eq('following_open_id', openId)
+  
+  res.json({
+    success: true,
+    diaryTotal: diaryTotal || 0,
+    totalDuration: 0,  // 需要计算视频总时长
+    streakDays: 0,     // 需要计算连续天数
+    followCount: followCount || 0,
+    fanCount: fanCount || 0
+  })
+})
+
+app.listen(3000, () => {
+  console.log('后端运行在 diary-backend-production-05aa.up.railway.app')
+})
