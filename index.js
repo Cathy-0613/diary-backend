@@ -367,10 +367,7 @@ app.get('/api/getPublicDiaries', async (req, res) => {
   try {
     let query = supabase
       .from('diaries')
-      .select(`
-        *,
-        users:open_id (nick_name, avatar_url)
-      `, { count: 'exact' })
+      .select('*', { count: 'exact' })
       .eq('is_public', true)
       .range(from, to)
     
@@ -393,29 +390,51 @@ app.get('/api/getPublicDiaries', async (req, res) => {
         .eq('open_id', currentOpenId)
         .in('diary_id', diaryIds)
       
-      likes.forEach(like => { likedMap[like.diary_id] = true })
+      if (likes) {
+        likes.forEach(like => { likedMap[like.diary_id] = true })
+      }
     }
     
-    const list = data.map(item => ({
-      id: item.id,
-      title: item.title,
-      cover_url: item.cover_url,
-      video_url: item.video_url,
-      location: item.location,
-      weather: item.weather,
-      diary_date: item.diary_date,
-      like_count: item.like_count || 0,
-      comment_count: item.comment_count || 0,
-      created_at: item.created_at,
-      is_liked: likedMap[item.id] || false,
-      user: {
-        nickName: item.users?.nick_name || '匿名用户',
-        avatarUrl: item.users?.avatar_url || ''
+    // 获取所有用户信息（单独查询）
+    const openIds = [...new Set(data.map(item => item.open_id))]
+    let userMap = {}
+    if (openIds.length > 0) {
+      const { data: users } = await supabase
+        .from('users')
+        .select('open_id, nick_name, avatar_url')
+        .in('open_id', openIds)
+      
+      if (users) {
+        users.forEach(user => {
+          userMap[user.open_id] = user
+        })
       }
-    }))
+    }
+    
+    const list = data.map(item => {
+      const user = userMap[item.open_id] || {}
+      return {
+        id: item.id,
+        title: item.title,
+        cover_url: item.cover_url,
+        video_url: item.video_url,
+        location: item.location,
+        weather: item.weather,
+        diary_date: item.diary_date,
+        like_count: item.like_count || 0,
+        comment_count: item.comment_count || 0,
+        created_at: item.created_at,
+        is_liked: likedMap[item.id] || false,
+        user: {
+          nickName: user.nick_name || '用户',
+          avatarUrl: user.avatar_url || ''
+        }
+      }
+    })
     
     res.json({ success: true, list, total: count, page: parseInt(page), size: parseInt(size) })
   } catch (err) {
+    console.error('获取公开日记失败:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })
@@ -664,10 +683,7 @@ app.get('/api/getComments', async (req, res) => {
   try {
     const { data, error, count } = await supabase
       .from('comments')
-      .select(`
-        *,
-        users:open_id (nick_name, avatar_url)
-      `, { count: 'exact' })
+      .select('*')
       .eq('diary_id', diaryId)
       .order('created_at', { ascending: false })
       .range(from, to)
