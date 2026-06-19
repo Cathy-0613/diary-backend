@@ -316,6 +316,7 @@ async function getBaiduAsrToken() {
 }
 
 // 语音识别接口
+// 语音识别接口（带超时和重试）
 app.post('/api/extractAudioAndASR', async (req, res) => {
   const { audioBase64, format = 'wav', rate = 16000 } = req.body
   
@@ -323,38 +324,61 @@ app.post('/api/extractAudioAndASR', async (req, res) => {
     return res.status(400).json({ success: false, error: '缺少音频数据' })
   }
   
-  try {
-    // 获取token
-    const token = await getBaiduAsrToken()
-    
-    // 计算音频长度（字节）
-    const audioBuffer = Buffer.from(audioBase64, 'base64')
-    const len = audioBuffer.length
-    
-    // 调用百度语音识别
-    const asrResponse = await axios.post('https://vop.baidu.com/server_api', {
-    format: format,
-    rate: rate,
-    channel: 1,
-    cuid: 'diary-app',
-    token: token,
-    speech: audioBase64,
-    len: len
-  })
-  
-  const data = asrResponse.data
-    console.log('百度识别结果:', data)
-    
-    if (data.err_no === 0) {
-      const text = data.result ? data.result.join('') : ''
-      res.json({ success: true, text: text })
-    } else {
-      res.status(500).json({ success: false, error: `百度错误: ${data.err_msg}` })
-    }
-  } catch (err) {
-    console.error('识别失败:', err)
-    res.status(500).json({ success: false, error: err.message })
+  // 检查音频大小（百度限制 60 秒，约 4.8MB PCM）
+  const audioBuffer = Buffer.from(audioBase64, 'base64')
+  const maxSize = 4.8 * 1024 * 1024 // 4.8MB
+  if (audioBuffer.length > maxSize) {
+    return res.status(400).json({ 
+      success: false, 
+      error: '音频过长，请控制在 60 秒内' 
+    })
   }
+  
+  let retries = 2
+  let lastError = null
+  
+  while (retries > 0) {
+    try {
+      const token = await getBaiduAsrToken()
+      const len = audioBuffer.length
+      
+      const asrResponse = await axios.post('https://vop.baidu.com/server_api', {
+        format: format,
+        rate: rate,
+        channel: 1,
+        cuid: 'diary-app',
+        token: token,
+        speech: audioBase64,
+        len: len
+      }, {
+        timeout: 30000, // 30秒超时
+        headers: { 'Content-Type': 'application/json' }
+      })
+      
+      const data = asrResponse.data
+      console.log('百度识别结果:', data)
+      
+      if (data.err_no === 0) {
+        const text = data.result ? data.result.join('') : ''
+        return res.json({ success: true, text: text })
+      } else if (data.err_no === 3305) {
+        // 音频过长，特殊处理
+        return res.status(400).json({ success: false, error: '音频过长，请控制在 60 秒内' })
+      } else {
+        throw new Error(`百度错误: ${data.err_msg} (${data.err_no})`)
+      }
+    } catch (err) {
+      lastError = err
+      console.error(`识别失败，剩余重试次数: ${retries - 1}`, err.message)
+      retries--
+      if (retries > 0) {
+        // 等待 1 秒后重试
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    }
+  }
+  
+  res.status(500).json({ success: false, error: lastError?.message || '识别失败' })
 })
 
 app.get('/api/getPublicDiaries', async (req, res) => {
@@ -774,6 +798,23 @@ app.get('/api/getUserStats', async (req, res) => {
     followCount: followCount || 0,
     fanCount: fanCount || 0
   })
+})
+
+// 翻译接口
+app.post('/api/translateSubtitle', async (req, res) => {
+  const { text, targetLang = 'zh' } = req.body
+  
+  if (!text) {
+    return res.status(400).json({ success: false, error: '缺少翻译文本' })
+  }
+  
+  try {
+    const translatedText = await baiduTranslate(text, targetLang)
+    res.json({ success: true, translatedText })
+  } catch (err) {
+    console.error('翻译失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
 })
 
 app.listen(3000, () => {
