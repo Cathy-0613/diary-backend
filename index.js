@@ -456,12 +456,12 @@ app.get('/api/getPublicDiaries', async (req, res) => {
 })
 
 /**
- * 2. 关注用户
- * POST /api/followUser
+ * 统一关注/取消关注
+ * POST /api/toggleFollow
  */
-app.post('/api/followUser', async (req, res) => {
+app.post('/api/toggleFollow', async (req, res) => {
   const currentOpenId = req.headers['x-openid']
-  const { targetOpenId } = req.body
+  const { targetOpenId, action } = req.body
   
   if (!currentOpenId) {
     return res.status(401).json({ success: false, error: '未登录' })
@@ -474,58 +474,38 @@ app.post('/api/followUser', async (req, res) => {
   }
   
   try {
-    const { data: existing } = await supabase
-      .from('follows')
-      .select('id')
-      .eq('follower_open_id', currentOpenId)
-      .eq('following_open_id', targetOpenId)
-      .single()
-    
-    if (existing) {
-      return res.json({ success: false, error: '已经关注过了' })
+    if (action === 'follow') {
+      // 关注
+      const { data: existing } = await supabase
+        .from('follows')
+        .select('id')
+        .eq('follower_open_id', currentOpenId)
+        .eq('following_open_id', targetOpenId)
+        .single()
+      
+      if (existing) {
+        return res.json({ success: false, error: '已经关注过了' })
+      }
+      
+      await supabase
+        .from('follows')
+        .insert([{
+          follower_open_id: currentOpenId,
+          following_open_id: targetOpenId,
+          created_at: new Date()
+        }])
+      
+      res.json({ success: true, action: 'follow' })
+    } else {
+      // 取消关注
+      await supabase
+        .from('follows')
+        .delete()
+        .eq('follower_open_id', currentOpenId)
+        .eq('following_open_id', targetOpenId)
+      
+      res.json({ success: true, action: 'unfollow' })
     }
-    
-    const { error } = await supabase
-      .from('follows')
-      .insert([{
-        follower_open_id: currentOpenId,
-        following_open_id: targetOpenId,
-        created_at: new Date()
-      }])
-    
-    if (error) throw error
-    
-    res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message })
-  }
-})
-
-/**
- * 3. 取消关注
- * POST /api/unfollowUser
- */
-app.post('/api/unfollowUser', async (req, res) => {
-  const currentOpenId = req.headers['x-openid']
-  const { targetOpenId } = req.body
-  
-  if (!currentOpenId) {
-    return res.status(401).json({ success: false, error: '未登录' })
-  }
-  if (!targetOpenId) {
-    return res.status(400).json({ success: false, error: '缺少目标用户ID' })
-  }
-  
-  try {
-    const { error } = await supabase
-      .from('follows')
-      .delete()
-      .eq('follower_open_id', currentOpenId)
-      .eq('following_open_id', targetOpenId)
-    
-    if (error) throw error
-    
-    res.json({ success: true })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
@@ -533,9 +513,9 @@ app.post('/api/unfollowUser', async (req, res) => {
 
 /**
  * 4. 获取关注/粉丝列表
- * GET /api/getFollowList?targetOpenId=xxx&type=following&page=1&size=20
+ * GET /api/getFanList?targetOpenId=xxx&type=following&page=1&size=20
  */
-app.get('/api/getFollowList', async (req, res) => {
+app.get('/api/getFanList', async (req, res) => {
   const currentOpenId = req.headers['x-openid']
   const { targetOpenId, type = 'following', page = 1, size = 20 } = req.query
   
@@ -587,9 +567,9 @@ app.get('/api/getFollowList', async (req, res) => {
 
 /**
  * 5. 点赞/取消点赞
- * POST /api/updateLike
+ * POST /api/toggleLike
  */
-app.post('/api/updateLike', async (req, res) => {
+app.post('/api/toggleLike', async (req, res) => {
   const currentOpenId = req.headers['x-openid']
   const { diaryId, action } = req.body
   
