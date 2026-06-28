@@ -649,7 +649,7 @@ app.post('/api/updateLike', async (req, res) => {
 app.post('/api/addComment', async (req, res) => {
   const currentOpenId = req.headers['x-openid']
   const { diaryId, content } = req.body
-  
+
   if (!currentOpenId) {
     return res.status(401).json({ success: false, error: '未登录' })
   }
@@ -733,7 +733,7 @@ app.get('/api/getComments', async (req, res) => {
       like_count: item.like_count || 0,
       created_at: item.created_at,
       user: {
-        nickName: item.users?.nick_name || '匿名用户',
+        nickName: userMap[item.open_id]?.nick_name || '用户',
         avatarUrl: item.users?.avatar_url || ''
       }
     }))
