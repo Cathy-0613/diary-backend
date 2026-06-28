@@ -571,10 +571,10 @@ app.get('/api/getFollowList', async (req, res) => {
     
     const list = data.map(item => {
       const userData = type === 'following' ? item.users : item.users
-      return {
-        openId: type === 'following' ? item.following_open_id : item.follower_open_id,
-        nickName: userData?.nick_name || '匿名用户',
-        avatarUrl: userData?.avatar_url || '',
+            return {
+        open_id: type === 'following' ? item.following_open_id : item.follower_open_id,
+        nick_name: userData?.nick_name || '匿名用户',
+        avatar_url: userData?.avatar_url || '',
         bio: userData?.bio || ''
       }
     })
@@ -706,6 +706,26 @@ app.get('/api/getComments', async (req, res) => {
       .range(from, to)
     
     if (error) throw error
+
+    // 如果没有评论，直接返回空数组
+    if (!data || data.length === 0) {
+      return res.json({ success: true, list: [], total: 0, page: parseInt(page), size: parseInt(size) })
+    }
+    
+    // 2. 获取所有评论者的用户信息（单独查询）
+    const openIds = [...new Set(data.map(item => item.open_id))]
+    let userMap = {}
+    
+    const { data: users } = await supabase
+      .from('users')
+      .select('open_id, nick_name, avatar_url')
+      .in('open_id', openIds)
+    
+    if (users) {
+      users.forEach(user => {
+        userMap[user.open_id] = user
+      })
+    }
     
     const comments = data.map(item => ({
       id: item.id,
@@ -718,7 +738,7 @@ app.get('/api/getComments', async (req, res) => {
       }
     }))
     
-    res.json({ success: true, comments, total: count, page: parseInt(page), size: parseInt(size) })
+    res.json({ success: true, list: comments, total: count, page: parseInt(page), size: parseInt(size) })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
