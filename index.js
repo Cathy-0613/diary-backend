@@ -158,7 +158,10 @@ app.post('/api/registerOrUpdateUser', async (req, res) => {
     // 正式上线需要调用：https://api.weixin.qq.com/sns/jscode2session
     
     // 临时测试用 openId
-    let openId = 'test-user-' + code.substring(0, 8)
+    const wxUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${APPID}&secret=${SECRET}&js_code=${code}&grant_type=authorization_code`
+    const wxRes = await fetch(wxUrl)
+    const wxData = await wxRes.json()
+    const openId = wxData.openid
     
     // 查询用户是否存在
     const { data: existingUser, error: findError } = await supabase
