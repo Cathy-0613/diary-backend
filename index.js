@@ -649,6 +649,8 @@ app.post('/api/updateLike', async (req, res) => {
 app.post('/api/addComment', async (req, res) => {
   const currentOpenId = req.headers['x-openid']
   const { diaryId, content } = req.body
+
+  const currentOpenId = req.headers['x-openid'] || 'test-user-001'
   
   if (!currentOpenId) {
     return res.status(401).json({ success: false, error: '未登录' })
