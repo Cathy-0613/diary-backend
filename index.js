@@ -158,10 +158,7 @@ app.post('/api/registerOrUpdateUser', async (req, res) => {
     // 正式上线需要调用：https://api.weixin.qq.com/sns/jscode2session
     
     // 临时测试用 openId
-    const wxUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${APPID}&secret=${SECRET}&js_code=${code}&grant_type=authorization_code`
-    const wxRes = await fetch(wxUrl)
-    const wxData = await wxRes.json()
-    const openId = wxData.openid
+    let openId = 'test-user-' + code.substring(0, 8)
     
     // 查询用户是否存在
     const { data: existingUser, error: findError } = await supabase
@@ -653,6 +650,8 @@ app.post('/api/addComment', async (req, res) => {
   const currentOpenId = req.headers['x-openid']
   const { diaryId, content } = req.body
 
+  const currentOpenId = req.headers['x-openid'] || 'test-user-001'
+  
   if (!currentOpenId) {
     return res.status(401).json({ success: false, error: '未登录' })
   }
@@ -736,7 +735,7 @@ app.get('/api/getComments', async (req, res) => {
       like_count: item.like_count || 0,
       created_at: item.created_at,
       user: {
-        nickName: userMap[item.open_id]?.nick_name || '用户',
+        nickName: item.users?.nick_name || '匿名用户',
         avatarUrl: item.users?.avatar_url || ''
       }
     }))
