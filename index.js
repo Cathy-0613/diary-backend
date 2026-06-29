@@ -833,6 +833,40 @@ app.post('/api/translateSubtitle', async (req, res) => {
   }
 })
 
+/**
+ * 上传视频到 Supabase Storage
+ * POST /api/uploadVideo
+ */
+app.post('/api/uploadVideo', async (req, res) => {
+  const { fileName, fileBase64 } = req.body
+  
+  if (!fileName || !fileBase64) {
+    return res.status(400).json({ success: false, error: '缺少文件信息' })
+  }
+  
+  try {
+    const fileBuffer = Buffer.from(fileBase64, 'base64')
+    
+    const { data, error } = await supabase.storage
+      .from('diary-videos')
+      .upload(fileName, fileBuffer, {
+        contentType: 'video/mp4',
+        cacheControl: '3600'
+      })
+    
+    if (error) throw error
+    
+    const { data: urlData } = supabase.storage
+      .from('diary-videos')
+      .getPublicUrl(fileName)
+    
+    res.json({ success: true, url: urlData.publicUrl })
+  } catch (err) {
+    console.error('上传失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
 app.listen(3000, () => {
   console.log('后端运行在 diary-backend-production-05aa.up.railway.app')
 })
