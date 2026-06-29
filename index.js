@@ -252,12 +252,8 @@ async function baiduTranslate(text, targetLang = 'zh') {
   
   const url = `https://fanyi-api.baidu.com/api/trans/vip/translate?q=${encodeURIComponent(text)}&from=auto&to=${targetLang}&appid=${appId}&salt=${salt}&sign=${sign}`
   
-  console.log('翻译请求URL:', url)  // 调试用，可以删掉
-  
   const response = await fetch(url)
   const data = await response.json()
-  
-  console.log('百度返回:', data)  // 调试用，可以删掉
   
   if (data.trans_result) {
     return data.trans_result.map(r => r.dst).join('')
@@ -265,7 +261,6 @@ async function baiduTranslate(text, targetLang = 'zh') {
     throw new Error('翻译失败: ' + JSON.stringify(data))
   }
 }
-
 
 
 // 语音识别 + 翻译 接口
