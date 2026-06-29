@@ -240,16 +240,24 @@ async function getBaiduAsrToken() {
 
 // 翻译接口（百度翻译需要签名）
 async function baiduTranslate(text, targetLang = 'zh') {
+  // 直接硬编码翻译的 App ID 和密钥
+  const appId = '20251226002527667'
+  const secretKey = 'rNRdz1M03_0PY8ytp9nl'
+  
   const salt = Date.now()
   const sign = require('crypto')
     .createHash('md5')
-    .update(BAIDU_TRANSLATE_APP_ID + text + salt + BAIDU_TRANSLATE_SECRET_KEY)
+    .update(appId + text + salt + secretKey)
     .digest('hex')
   
-  const url = `https://fanyi-api.baidu.com/api/trans/vip/translate?q=${encodeURIComponent(text)}&from=auto&to=${targetLang}&appid=${BAIDU_TRANSLATE_APP_ID}&salt=${salt}&sign=${sign}`
+  const url = `https://fanyi-api.baidu.com/api/trans/vip/translate?q=${encodeURIComponent(text)}&from=auto&to=${targetLang}&appid=${appId}&salt=${salt}&sign=${sign}`
+  
+  console.log('翻译请求URL:', url)  // 调试用，可以删掉
   
   const response = await fetch(url)
   const data = await response.json()
+  
+  console.log('百度返回:', data)  // 调试用，可以删掉
   
   if (data.trans_result) {
     return data.trans_result.map(r => r.dst).join('')
@@ -257,6 +265,7 @@ async function baiduTranslate(text, targetLang = 'zh') {
     throw new Error('翻译失败: ' + JSON.stringify(data))
   }
 }
+
 
 
 // 语音识别 + 翻译 接口
