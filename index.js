@@ -242,7 +242,7 @@ async function getBaiduAsrToken() {
 async function baiduTranslate(text, targetLang = 'zh') {
   console.log('翻译调用:', { text, targetLang })  
   console.log('APP_ID:', BAIDU_TRANSLATE_APP_ID)   
-  const salt = Date.now()
+  const salt = Date.now().toString() + Math.random().toString(36).substring(7)
   const sign = require('crypto')
     .createHash('md5')
     .update(BAIDU_TRANSLATE_APP_ID + text + salt + BAIDU_TRANSLATE_SECRET_KEY)
