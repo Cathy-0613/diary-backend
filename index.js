@@ -410,6 +410,12 @@ app.get('/api/getPublicDiaries', async (req, res) => {
     
     if (error) throw error
     
+    // 如果没有数据，直接返回空列表
+    if (!data || data.length === 0) {
+      return res.json({ success: true, list: [], total: 0, page: parseInt(page), size: parseInt(size) })
+    }
+    
+    // 获取点赞状态
     let likedMap = {}
     if (currentOpenId && data.length > 0) {
       const diaryIds = data.map(d => d.id)
@@ -424,7 +430,7 @@ app.get('/api/getPublicDiaries', async (req, res) => {
       }
     }
     
-    // 获取所有用户信息（单独查询）
+    // 获取用户信息
     const openIds = [...new Set(data.map(item => item.open_id))]
     let userMap = {}
     if (openIds.length > 0) {
@@ -440,13 +446,19 @@ app.get('/api/getPublicDiaries', async (req, res) => {
       }
     }
     
-    const comments = data.map(item => ({
+    // 组装数据
+    const list = data.map(item => ({
       id: item.id,
-      content: item.content,
+      title: item.title,
+      cover_url: item.cover_url,
+      video_url: item.video_url,
+      location: item.location,
+      weather: item.weather,
+      diary_date: item.diary_date,
       like_count: item.like_count || 0,
+      comment_count: item.comment_count || 0,
       created_at: item.created_at,
-      open_id: item.open_id,
-      isMine: item.open_id === currentOpenId,
+      is_liked: likedMap[item.id] || false,
       user: {
         nickName: userMap[item.open_id]?.nick_name || '用户',
         avatarUrl: userMap[item.open_id]?.avatar_url || ''
