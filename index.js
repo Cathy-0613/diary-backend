@@ -837,6 +837,10 @@ app.post('/api/translateSubtitle', async (req, res) => {
  * 上传视频到 Supabase Storage
  * POST /api/uploadVideo
  */
+/**
+ * 上传视频到 Supabase Storage
+ * POST /api/uploadVideo
+ */
 app.post('/api/uploadVideo', async (req, res) => {
   const { fileName, fileBase64 } = req.body
   
