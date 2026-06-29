@@ -240,6 +240,8 @@ async function getBaiduAsrToken() {
 
 // 翻译接口（百度翻译需要签名）
 async function baiduTranslate(text, targetLang = 'zh') {
+  console.log('翻译调用:', { text, targetLang })  
+  console.log('APP_ID:', BAIDU_TRANSLATE_APP_ID)   
   const salt = Date.now()
   const sign = require('crypto')
     .createHash('md5')
