@@ -417,7 +417,7 @@ app.get('/api/getPublicDiaries', async (req, res) => {
     
     // 获取点赞状态
     let likedMap = {}
-    if (currentOpenId && data.length > 0) {
+    if (currentOpenId) {
       const diaryIds = data.map(d => d.id)
       const { data: likes } = await supabase
         .from('likes')
@@ -446,7 +446,7 @@ app.get('/api/getPublicDiaries', async (req, res) => {
       }
     }
     
-    // 组装数据
+    // 组装数据 - 变量名用 list
     const list = data.map(item => ({
       id: item.id,
       title: item.title,
@@ -465,13 +465,12 @@ app.get('/api/getPublicDiaries', async (req, res) => {
       }
     }))
     
-    res.json({ success: true, list, total: count, page: parseInt(page), size: parseInt(size) })
+    res.json({ success: true, list: list, total: count, page: parseInt(page), size: parseInt(size) })
   } catch (err) {
     console.error('获取公开日记失败:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })
-
 /**
  * 统一关注/取消关注
  * POST /api/toggleFollow
