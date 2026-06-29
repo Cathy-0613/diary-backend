@@ -240,21 +240,11 @@ async function getBaiduAsrToken() {
 
 // 翻译接口（百度翻译需要签名）
 async function baiduTranslate(text, targetLang = 'zh') {
-console.log('========== 翻译调试信息 ==========')
-  console.log('翻译文本:', text)
-  console.log('BAIDU_TRANSLATE_APP_ID:', BAIDU_TRANSLATE_APP_ID)
-  console.log('BAIDU_TRANSLATE_SECRET_KEY:', BAIDU_TRANSLATE_SECRET_KEY)
-  // ===== 调试日志结束 =====
-  
   const salt = Date.now()
   const sign = require('crypto')
     .createHash('md5')
     .update(BAIDU_TRANSLATE_APP_ID + text + salt + BAIDU_TRANSLATE_SECRET_KEY)
     .digest('hex')
-  
-  // 再加一行，打印签名
-  console.log('生成的签名 sign:', sign)
-  console.log('====================================')
   
   const url = `https://fanyi-api.baidu.com/api/trans/vip/translate?q=${encodeURIComponent(text)}&from=auto&to=${targetLang}&appid=${BAIDU_TRANSLATE_APP_ID}&salt=${salt}&sign=${sign}`
   
