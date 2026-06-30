@@ -1312,14 +1312,22 @@ app.post('/api/updateUserProfile', async (req, res) => {
     if (avatarUrl !== undefined) updateData.avatar_url = avatarUrl
     if (bio !== undefined) updateData.bio = bio
     
-    const { data, error } = await supabase
+    // 先更新
+    const { error: updateError } = await supabase
       .from('users')
       .update(updateData)
       .eq('open_id', openId)
-      .select()
+    
+    if (updateError) throw updateError
+    
+    // 再查询更新后的数据
+    const { data, error: findError } = await supabase
+      .from('users')
+      .select('open_id, nick_name, avatar_url, bio')
+      .eq('open_id', openId)
       .single()
     
-    if (error) throw error
+    if (findError) throw findError
     
     res.json({
       success: true,
@@ -1335,7 +1343,6 @@ app.post('/api/updateUserProfile', async (req, res) => {
     res.status(500).json({ success: false, error: err.message })
   }
 })
-
 /**
  * 获取指定用户信息
  * GET /api/getUserInfo?targetOpenId=xxx
