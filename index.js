@@ -39,8 +39,6 @@ app.get('/api/getDiaryList', async (req, res) => {
   res.json({ success: true, list: data })
 })
 
-
-
 // 保存日记
 app.post('/api/addDiary', async (req, res) => {
   const { 
@@ -52,7 +50,8 @@ app.post('/api/addDiary', async (req, res) => {
     diary_date, 
     subtitle_raw, 
     subtitle_translated, 
-    is_public 
+    is_public,
+    notebook_id  // 新增：日记本ID
   } = req.body
   
   // 临时用固定 openId，后续换成真实用户
@@ -71,12 +70,22 @@ app.post('/api/addDiary', async (req, res) => {
       subtitle_raw: subtitle_raw || '',
       subtitle_translated: subtitle_translated || '',
       is_public: is_public || false,
+      notebook_id: notebook_id || null,  // 关联日记本
       like_count: 0
     }])
     .select()
   
   if (error) {
     return res.status(500).json({ success: false, error: error.message })
+  }
+  
+  // 如果关联了日记本，更新日记本的更新时间
+  if (notebook_id) {
+    await supabase
+      .from('notebooks')
+      .update({ updated_at: new Date() })
+      .eq('id', notebook_id)
+      .eq('open_id', openId)
   }
   
   res.json({ success: true, data: data[0] })
@@ -117,7 +126,7 @@ app.delete('/api/deleteDiary', async (req, res) => {
   // 先确认是本人的日记
   const { data: diary, error: findError } = await supabase
     .from('diaries')
-    .select('open_id')
+    .select('open_id, notebook_id')
     .eq('id', id)
     .single()
   
@@ -139,6 +148,15 @@ app.delete('/api/deleteDiary', async (req, res) => {
   if (error) {
     console.error('删除失败:', error)
     return res.status(500).json({ success: false, error: error.message })
+  }
+  
+  // 如果有关联的日记本，更新日记本的更新时间
+  if (diary.notebook_id) {
+    await supabase
+      .from('notebooks')
+      .update({ updated_at: new Date() })
+      .eq('id', diary.notebook_id)
+      .eq('open_id', openId)
   }
   
   res.json({ success: true })
@@ -262,7 +280,6 @@ async function baiduTranslate(text, targetLang = 'zh') {
   }
 }
 
-
 // 语音识别 + 翻译 接口
 app.post('/api/asrAndTranslate', async (req, res) => {
   const { audioBase64, targetLang = 'zh' } = req.body
@@ -320,7 +337,6 @@ async function getBaiduAsrToken() {
   }
 }
 
-// 语音识别接口
 // 语音识别接口（带超时和重试）
 app.post('/api/extractAudioAndASR', async (req, res) => {
   const { audioBase64, format = 'wav', rate = 16000 } = req.body
@@ -471,6 +487,7 @@ app.get('/api/getPublicDiaries', async (req, res) => {
     res.status(500).json({ success: false, error: err.message })
   }
 })
+
 /**
  * 统一关注/取消关注
  * POST /api/toggleFollow
@@ -863,6 +880,417 @@ app.post('/api/uploadVideo', async (req, res) => {
     res.json({ success: true, url: urlData.publicUrl })
   } catch (err) {
     console.error('上传失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+// ==================== 日记本相关接口 ====================
+
+/**
+ * 获取日记本列表
+ * GET /api/getNotebookList
+ */
+app.get('/api/getNotebookList', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  const { page = 1, size = 20 } = req.query
+  
+  const from = (parseInt(page) - 1) * parseInt(size)
+  const to = from + parseInt(size) - 1
+  
+  try {
+    // 获取用户的日记本列表
+    const { data, error, count } = await supabase
+      .from('notebooks')
+      .select('*', { count: 'exact' })
+      .eq('open_id', openId)
+      .order('updated_at', { ascending: false })
+      .range(from, to)
+    
+    if (error) throw error
+    
+    // 获取每个日记本中的日记数量
+    const notebookIds = data.map(item => item.id)
+    let diaryCountMap = {}
+    
+    if (notebookIds.length > 0) {
+      const { data: diaries } = await supabase
+        .from('diaries')
+        .select('notebook_id')
+        .in('notebook_id', notebookIds)
+        .eq('open_id', openId)
+      
+      if (diaries) {
+        diaries.forEach(d => {
+          diaryCountMap[d.notebook_id] = (diaryCountMap[d.notebook_id] || 0) + 1
+        })
+      }
+    }
+    
+    // 组装数据
+    const list = data.map(item => ({
+      id: item.id,
+      name: item.name,
+      description: item.description || '',
+      cover_url: item.cover_url || '',
+      diary_count: diaryCountMap[item.id] || 0,
+      is_default: item.is_default || false,
+      created_at: item.created_at,
+      updated_at: item.updated_at
+    }))
+    
+    res.json({ 
+      success: true, 
+      list, 
+      total: count || 0,
+      page: parseInt(page),
+      size: parseInt(size)
+    })
+  } catch (err) {
+    console.error('获取日记本列表失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 创建日记本
+ * POST /api/addNotebook
+ */
+app.post('/api/addNotebook', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  const { name, description, cover_url } = req.body
+  
+  if (!name || name.trim() === '') {
+    return res.status(400).json({ success: false, error: '日记本名称不能为空' })
+  }
+  
+  if (name.length > 50) {
+    return res.status(400).json({ success: false, error: '日记本名称不能超过50个字符' })
+  }
+  
+  try {
+    // 检查是否已有同名日记本
+    const { data: existing, error: checkError } = await supabase
+      .from('notebooks')
+      .select('id')
+      .eq('open_id', openId)
+      .eq('name', name.trim())
+      .maybeSingle()
+    
+    if (existing) {
+      return res.status(400).json({ success: false, error: '已存在同名日记本' })
+    }
+    
+    // 创建日记本
+    const { data, error } = await supabase
+      .from('notebooks')
+      .insert([{
+        open_id: openId,
+        name: name.trim(),
+        description: description || '',
+        cover_url: cover_url || '',
+        is_default: false,
+        created_at: new Date(),
+        updated_at: new Date()
+      }])
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    res.json({ 
+      success: true, 
+      data: {
+        id: data.id,
+        name: data.name,
+        description: data.description,
+        cover_url: data.cover_url,
+        diary_count: 0,
+        is_default: false,
+        created_at: data.created_at,
+        updated_at: data.updated_at
+      }
+    })
+  } catch (err) {
+    console.error('创建日记本失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 更新日记本
+ * POST /api/updateNotebook
+ */
+app.post('/api/updateNotebook', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  const { id, name, description, cover_url } = req.body
+  
+  if (!id) {
+    return res.status(400).json({ success: false, error: '缺少日记本ID' })
+  }
+  
+  try {
+    // 先查询日记本是否存在且属于当前用户
+    const { data: existing, error: findError } = await supabase
+      .from('notebooks')
+      .select('*')
+      .eq('id', id)
+      .eq('open_id', openId)
+      .single()
+    
+    if (findError || !existing) {
+      return res.status(404).json({ success: false, error: '日记本不存在或无权限' })
+    }
+    
+    // 如果是默认日记本，不允许修改名称
+    if (existing.is_default && name && name !== existing.name) {
+      return res.status(400).json({ success: false, error: '默认日记本不能修改名称' })
+    }
+    
+    // 检查新名称是否与其他日记本重复
+    if (name && name.trim() !== existing.name) {
+      const { data: duplicate } = await supabase
+        .from('notebooks')
+        .select('id')
+        .eq('open_id', openId)
+        .eq('name', name.trim())
+        .neq('id', id)
+        .maybeSingle()
+      
+      if (duplicate) {
+        return res.status(400).json({ success: false, error: '已存在同名日记本' })
+      }
+    }
+    
+    // 构建更新数据
+    const updateData = {
+      updated_at: new Date()
+    }
+    
+    if (name) updateData.name = name.trim()
+    if (description !== undefined) updateData.description = description
+    if (cover_url !== undefined) updateData.cover_url = cover_url
+    
+    // 更新日记本
+    const { data, error } = await supabase
+      .from('notebooks')
+      .update(updateData)
+      .eq('id', id)
+      .eq('open_id', openId)
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    // 获取日记本中的日记数量
+    const { count: diaryCount } = await supabase
+      .from('diaries')
+      .select('*', { count: 'exact', head: true })
+      .eq('notebook_id', id)
+      .eq('open_id', openId)
+    
+    res.json({ 
+      success: true, 
+      data: {
+        id: data.id,
+        name: data.name,
+        description: data.description,
+        cover_url: data.cover_url,
+        diary_count: diaryCount || 0,
+        is_default: data.is_default,
+        created_at: data.created_at,
+        updated_at: data.updated_at
+      }
+    })
+  } catch (err) {
+    console.error('更新日记本失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 删除日记本
+ * DELETE /api/deleteNotebook
+ */
+app.delete('/api/deleteNotebook', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  const { id } = req.body
+  
+  if (!id) {
+    return res.status(400).json({ success: false, error: '缺少日记本ID' })
+  }
+  
+  try {
+    // 先查询日记本是否存在且属于当前用户
+    const { data: existing, error: findError } = await supabase
+      .from('notebooks')
+      .select('*')
+      .eq('id', id)
+      .eq('open_id', openId)
+      .single()
+    
+    if (findError || !existing) {
+      return res.status(404).json({ success: false, error: '日记本不存在或无权限' })
+    }
+    
+    // 不允许删除默认日记本
+    if (existing.is_default) {
+      return res.status(400).json({ success: false, error: '不能删除默认日记本' })
+    }
+    
+    // 检查日记本中是否有日记
+    const { count: diaryCount } = await supabase
+      .from('diaries')
+      .select('*', { count: 'exact', head: true })
+      .eq('notebook_id', id)
+      .eq('open_id', openId)
+    
+    if (diaryCount > 0) {
+      // 可以选择是否允许删除有内容的日记本
+      // 方案1：不允许删除有日记的日记本
+      // return res.status(400).json({ success: false, error: '该日记本中还有日记，请先清空或移动日记' })
+      
+      // 方案2：删除日记本时，将日记的 notebook_id 设置为 null
+      await supabase
+        .from('diaries')
+        .update({ notebook_id: null })
+        .eq('notebook_id', id)
+        .eq('open_id', openId)
+    }
+    
+    // 删除日记本
+    const { error } = await supabase
+      .from('notebooks')
+      .delete()
+      .eq('id', id)
+      .eq('open_id', openId)
+    
+    if (error) throw error
+    
+    res.json({ 
+      success: true, 
+      message: diaryCount > 0 ? '日记本已删除，其中的日记已移至未分类' : '日记本已删除' 
+    })
+  } catch (err) {
+    console.error('删除日记本失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 获取日记本详情
+ * GET /api/getNotebookDetail
+ */
+app.get('/api/getNotebookDetail', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  const { id } = req.query
+  
+  if (!id) {
+    return res.status(400).json({ success: false, error: '缺少日记本ID' })
+  }
+  
+  try {
+    // 获取日记本信息
+    const { data: notebook, error: notebookError } = await supabase
+      .from('notebooks')
+      .select('*')
+      .eq('id', id)
+      .eq('open_id', openId)
+      .single()
+    
+    if (notebookError || !notebook) {
+      return res.status(404).json({ success: false, error: '日记本不存在或无权限' })
+    }
+    
+    // 获取日记本中的日记列表
+    const { data: diaries, error: diariesError } = await supabase
+      .from('diaries')
+      .select('*')
+      .eq('notebook_id', id)
+      .eq('open_id', openId)
+      .order('created_at', { ascending: false })
+    
+    if (diariesError) throw diariesError
+    
+    // 获取日记数量
+    const diaryCount = diaries ? diaries.length : 0
+    
+    // 统计日记本中的总视频时长（如果有视频时长字段的话）
+    let totalDuration = 0
+    if (diaries && diaries.length > 0) {
+      // 假设日记表中有 duration 字段，如果没有可以跳过
+      // diaries.forEach(d => {
+      //   totalDuration += d.duration || 0
+      // })
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        id: notebook.id,
+        name: notebook.name,
+        description: notebook.description || '',
+        cover_url: notebook.cover_url || '',
+        diary_count: diaryCount,
+        total_duration: totalDuration,
+        is_default: notebook.is_default || false,
+        created_at: notebook.created_at,
+        updated_at: notebook.updated_at,
+        diaries: diaries || []  // 返回日记列表，方便 detail 页面展示
+      }
+    })
+  } catch (err) {
+    console.error('获取日记本详情失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 获取日记本统计信息（用于首页或仪表盘）
+ * GET /api/getNotebookStats
+ */
+app.get('/api/getNotebookStats', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  
+  try {
+    // 获取日记本总数
+    const { count: notebookCount } = await supabase
+      .from('notebooks')
+      .select('*', { count: 'exact', head: true })
+      .eq('open_id', openId)
+    
+    // 获取所有日记总数
+    const { count: diaryCount } = await supabase
+      .from('diaries')
+      .select('*', { count: 'exact', head: true })
+      .eq('open_id', openId)
+    
+    // 获取默认日记本信息
+    const { data: defaultNotebook } = await supabase
+      .from('notebooks')
+      .select('id, name')
+      .eq('open_id', openId)
+      .eq('is_default', true)
+      .single()
+    
+    // 获取最近更新的日记本
+    const { data: recentNotebooks } = await supabase
+      .from('notebooks')
+      .select('id, name, updated_at')
+      .eq('open_id', openId)
+      .order('updated_at', { ascending: false })
+      .limit(5)
+    
+    res.json({
+      success: true,
+      data: {
+        notebookCount: notebookCount || 0,
+        diaryCount: diaryCount || 0,
+        defaultNotebook: defaultNotebook || null,
+        recentNotebooks: recentNotebooks || []
+      }
+    })
+  } catch (err) {
+    console.error('获取日记本统计失败:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })
