@@ -1295,6 +1295,287 @@ app.get('/api/getNotebookStats', async (req, res) => {
   }
 })
 
+/**
+ * 更新用户资料
+ * POST /api/updateUserProfile
+ */
+app.post('/api/updateUserProfile', async (req, res) => {
+  const openId = req.headers['x-openid'] || 'test-user-001'
+  const { nickName, avatarUrl, bio } = req.body
+  
+  try {
+    // 构建更新数据
+    const updateData = {
+      updated_at: new Date()
+    }
+    if (nickName !== undefined) updateData.nick_name = nickName
+    if (avatarUrl !== undefined) updateData.avatar_url = avatarUrl
+    if (bio !== undefined) updateData.bio = bio
+    
+    const { data, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('open_id', openId)
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    res.json({
+      success: true,
+      user: {
+        open_id: data.open_id,
+        nick_name: data.nick_name,
+        avatar_url: data.avatar_url,
+        bio: data.bio || ''
+      }
+    })
+  } catch (err) {
+    console.error('更新用户资料失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 获取指定用户信息
+ * GET /api/getUserInfo?targetOpenId=xxx
+ */
+app.get('/api/getUserInfo', async (req, res) => {
+  const { targetOpenId } = req.query
+  const currentOpenId = req.headers['x-openid'] || 'test-user-001'
+  
+  if (!targetOpenId) {
+    return res.status(400).json({ success: false, error: '缺少目标用户ID' })
+  }
+  
+  try {
+    // 获取用户信息
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('open_id, nick_name, avatar_url, bio, created_at')
+      .eq('open_id', targetOpenId)
+      .single()
+    
+    if (userError || !user) {
+      return res.status(404).json({ success: false, error: '用户不存在' })
+    }
+    
+    // 获取该用户的日记总数
+    const { count: diaryCount } = await supabase
+      .from('diaries')
+      .select('*', { count: 'exact', head: true })
+      .eq('open_id', targetOpenId)
+    
+    // 获取关注数
+    const { count: followCount } = await supabase
+      .from('follows')
+      .select('*', { count: 'exact', head: true })
+      .eq('follower_open_id', targetOpenId)
+    
+    // 获取粉丝数
+    const { count: fanCount } = await supabase
+      .from('follows')
+      .select('*', { count: 'exact', head: true })
+      .eq('following_open_id', targetOpenId)
+    
+    // 判断当前用户是否关注了该用户
+    let isFollowed = false
+    if (currentOpenId && currentOpenId !== targetOpenId) {
+      const { data: follow } = await supabase
+        .from('follows')
+        .select('id')
+        .eq('follower_open_id', currentOpenId)
+        .eq('following_open_id', targetOpenId)
+        .maybeSingle()
+      
+      isFollowed = !!follow
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        open_id: user.open_id,
+        nick_name: user.nick_name,
+        avatar_url: user.avatar_url,
+        bio: user.bio || '',
+        diary_count: diaryCount || 0,
+        follow_count: followCount || 0,
+        fan_count: fanCount || 0,
+        is_followed: isFollowed,
+        created_at: user.created_at
+      }
+    })
+  } catch (err) {
+    console.error('获取用户信息失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 搜索公开日记
+ * GET /api/searchDiaries?keyword=xxx&page=1&size=20
+ */
+app.get('/api/searchDiaries', async (req, res) => {
+  const { keyword, page = 1, size = 20 } = req.query
+  const currentOpenId = req.headers['x-openid'] || null
+  
+  if (!keyword || keyword.trim() === '') {
+    return res.status(400).json({ success: false, error: '请输入搜索关键词' })
+  }
+  
+  const from = (parseInt(page) - 1) * parseInt(size)
+  const to = from + parseInt(size) - 1
+  
+  try {
+    // 搜索公开日记（标题或内容匹配）
+    let query = supabase
+      .from('diaries')
+      .select('*', { count: 'exact' })
+      .eq('is_public', true)
+      .or(`title.ilike.%${keyword.trim()}%,subtitle_raw.ilike.%${keyword.trim()}%`)
+      .order('created_at', { ascending: false })
+      .range(from, to)
+    
+    const { data, error, count } = await query
+    
+    if (error) throw error
+    
+    if (!data || data.length === 0) {
+      return res.json({ success: true, list: [], total: 0, page: parseInt(page), size: parseInt(size) })
+    }
+    
+    // 获取点赞状态
+    let likedMap = {}
+    if (currentOpenId) {
+      const diaryIds = data.map(d => d.id)
+      const { data: likes } = await supabase
+        .from('likes')
+        .select('diary_id')
+        .eq('open_id', currentOpenId)
+        .in('diary_id', diaryIds)
+      
+      if (likes) {
+        likes.forEach(like => { likedMap[like.diary_id] = true })
+      }
+    }
+    
+    // 获取用户信息
+    const openIds = [...new Set(data.map(item => item.open_id))]
+    let userMap = {}
+    if (openIds.length > 0) {
+      const { data: users } = await supabase
+        .from('users')
+        .select('open_id, nick_name, avatar_url')
+        .in('open_id', openIds)
+      
+      if (users) {
+        users.forEach(user => {
+          userMap[user.open_id] = user
+        })
+      }
+    }
+    
+    const list = data.map(item => ({
+      id: item.id,
+      title: item.title,
+      cover_url: item.cover_url,
+      video_url: item.video_url,
+      location: item.location,
+      weather: item.weather,
+      diary_date: item.diary_date,
+      like_count: item.like_count || 0,
+      comment_count: item.comment_count || 0,
+      created_at: item.created_at,
+      is_liked: likedMap[item.id] || false,
+      user: {
+        nickName: userMap[item.open_id]?.nick_name || '用户',
+        avatarUrl: userMap[item.open_id]?.avatar_url || ''
+      }
+    }))
+    
+    res.json({ success: true, list, total: count, page: parseInt(page), size: parseInt(size) })
+  } catch (err) {
+    console.error('搜索日记失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * 获取热门标签（从公开日记中提取）
+ * GET /api/getHotTags?limit=10
+ */
+app.get('/api/getHotTags', async (req, res) => {
+  const { limit = 10 } = req.query
+  
+  try {
+    // 获取所有公开日记的标签（如果有 tags 字段）
+    // 目前 diaries 表没有 tags 字段，先返回默认标签
+    // 后续可以扩展：从 subtitle_raw 或标题中提取关键词
+    
+    // 方案1：从现有数据中统计位置标签
+    const { data: diaries } = await supabase
+      .from('diaries')
+      .select('location')
+      .eq('is_public', true)
+      .not('location', 'is', null)
+      .not('location', 'eq', '')
+      .not('location', 'eq', '位置获取失败')
+    
+    // 统计位置出现次数
+    const tagMap = {}
+    if (diaries) {
+      diaries.forEach(d => {
+        const location = d.location.trim()
+        if (location) {
+          tagMap[location] = (tagMap[location] || 0) + 1
+        }
+      })
+    }
+    
+    // 手动添加一些预设热门标签（作为保底）
+    const presetTags = [
+      { name: '旅行', count: 0 },
+      { name: '美食', count: 0 },
+      { name: '心情', count: 0 },
+      { name: '日记', count: 0 },
+      { name: '生活', count: 0 }
+    ]
+    
+    // 合并统计结果
+    const tags = Object.keys(tagMap).map(name => ({
+      name,
+      count: tagMap[name]
+    }))
+    
+    // 按出现次数排序
+    tags.sort((a, b) => b.count - a.count)
+    
+    // 合并预设标签
+    const allTags = [...tags, ...presetTags]
+    
+    // 去重并限制数量
+    const uniqueTags = []
+    const nameSet = new Set()
+    for (const tag of allTags) {
+      if (!nameSet.has(tag.name)) {
+        nameSet.add(tag.name)
+        uniqueTags.push(tag)
+      }
+      if (uniqueTags.length >= parseInt(limit)) break
+    }
+    
+    res.json({
+      success: true,
+      tags: uniqueTags
+    })
+  } catch (err) {
+    console.error('获取热门标签失败:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+
+
 app.listen(3000, () => {
   console.log('后端运行在 diary-backend-production-05aa.up.railway.app')
 })
