@@ -556,24 +556,24 @@ app.get('/api/getFanList', async (req, res) => {
   const from = (parseInt(page) - 1) * parseInt(size)
   const to = from + parseInt(size) - 1
   
+  if (!userId) {
+    return res.status(401).json({ success: false, error: '未登录' })
+  }
+  
   try {
     let query
     if (type === 'following') {
+      // 我关注的人
       query = supabase
         .from('follows')
-        .select(`
-          following_open_id,
-          users:following_open_id (nick_name, avatar_url, bio)
-        `)
+        .select('following_open_id')
         .eq('follower_open_id', userId)
         .range(from, to)
     } else {
+      // 关注我的人（粉丝）
       query = supabase
         .from('follows')
-        .select(`
-          follower_open_id,
-          users:follower_open_id (nick_name, avatar_url, bio)
-        `)
+        .select('follower_open_id')
         .eq('following_open_id', userId)
         .range(from, to)
     }
@@ -582,21 +582,46 @@ app.get('/api/getFanList', async (req, res) => {
     
     if (error) throw error
     
-    const list = data.map(item => {
-      const userData = type === 'following' ? item.users : item.users
-            return {
-        open_id: type === 'following' ? item.following_open_id : item.follower_open_id,
-        nick_name: userData?.nick_name || '匿名用户',
-        avatar_url: userData?.avatar_url || '',
-        bio: userData?.bio || ''
+    if (!data || data.length === 0) {
+      return res.json({ success: true, list: [], page: parseInt(page), size: parseInt(size) })
+    }
+    
+    // 提取所有用户 ID
+    const openIds = data.map(item => 
+      type === 'following' ? item.following_open_id : item.follower_open_id
+    )
+    
+    // 单独查询用户信息
+    const { data: users, error: userError } = await supabase
+      .from('users')
+      .select('open_id, nick_name, avatar_url, bio')
+      .in('open_id', openIds)
+    
+    if (userError) throw userError
+    
+    // 组装用户信息
+    const userMap = {}
+    users.forEach(user => {
+      userMap[user.open_id] = user
+    })
+    
+    const list = openIds.map(openId => {
+      const user = userMap[openId] || {}
+      return {
+        open_id: openId,
+        nick_name: user.nick_name || '用户',
+        avatar_url: user.avatar_url || '',
+        bio: user.bio || ''
       }
     })
     
     res.json({ success: true, list, page: parseInt(page), size: parseInt(size) })
   } catch (err) {
+    console.error('获取关注列表失败:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })
+
 
 /**
  * 5. 点赞/取消点赞
